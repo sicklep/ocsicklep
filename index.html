@@ -23,6 +23,7 @@
   --avatar-shadow:0 1px 2px rgba(0,0,0,.2);
   --theme-toggle-bg:#4c6ef5;--theme-toggle-text:#fff;
   --modal-bg:rgba(0,0,0,.45);
+  --save-active:#4c6ef5;--save-active-bg:#eef2ff;
 }
 body.dark{
   --bg-gradient:linear-gradient(135deg,#0d1b2a 0%,#152741 50%,#0f1c2e 100%);
@@ -41,6 +42,7 @@ body.dark{
   --avatar-shadow:0 1px 4px rgba(0,0,0,.3);
   --theme-toggle-bg:linear-gradient(135deg,#1e4f8a,#2a6ab0);--theme-toggle-text:#fff;
   --modal-bg:rgba(0,0,0,.6);
+  --save-active:#6ea8fe;--save-active-bg:rgba(78,143,214,.2);
 }
 *{box-sizing:border-box}
 body{font-family:system-ui,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg-gradient);min-height:100vh;color:var(--text-color);margin:0;transition:background .3s,color .3s}
@@ -96,6 +98,13 @@ button:active{transform:translateY(0)}
 #toast{position:fixed;bottom:30px;left:50%;transform:translateX(-50%);background:var(--toast-bg);color:var(--toast-text);padding:10px 20px;border-radius:10px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .3s;z-index:9999;border:1px solid var(--panel-border)}
 #toast.show{opacity:1}
 .save-flag{font-size:11px;color:var(--hint-color);margin-top:6px;text-align:right}
+/* 存档列表 */
+.save-item{display:flex;justify-content:space-between;align-items:center;padding:7px 8px;border-radius:8px;border:1px solid transparent}
+.save-item.active{background:var(--save-active-bg);border-color:var(--save-active)}
+.save-item .save-name{flex:1;font-size:14px;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.save-item.active .save-name{color:var(--save-active);font-weight:600}
+.save-item .save-meta{font-size:11px;color:var(--hint-color);margin-left:8px;flex-shrink:0}
+.save-item .save-actions{display:flex;gap:4px;flex-shrink:0}
 /* 弹窗 */
 .modal{position:fixed;inset:0;background:var(--modal-bg);display:none;align-items:center;justify-content:center;z-index:2000;padding:20px}
 .modal.show{display:flex}
@@ -128,10 +137,17 @@ button:active{transform:translateY(0)}
         <button id="add-line-btn">添加对话</button>
         <button id="clear-btn">清空</button>
       </div>
-      <p class="hint">每行可点击“图”上传一张图片（表情包）。内容会自动保存在本地。</p>
+      <p class="hint">每行可点击“图”上传一张图片（表情包）。内容会自动保存在当前存档。</p>
     </div>
 
     <div class="panel">
+      <h2>存档管理</h2>
+      <div class="input-group">
+        <input type="text" id="new-save-name" placeholder="新存档名称" />
+        <button id="new-save-btn">新建存档</button>
+      </div>
+      <ul id="save-list" style="list-style:none;margin:0;padding:0"></ul>
+      <div style="height:14px"></div>
       <h2>预览</h2>
       <div class="title-row">
         <span>标题</span>
@@ -183,79 +199,123 @@ button:active{transform:translateY(0)}
   </div>
 </div>
 
+<!-- 存档重命名弹窗 -->
+<div class="modal" id="rename-modal">
+  <div class="modal-box">
+    <h3>重命名存档</h3>
+    <input type="text" id="rename-input" style="width:100%" placeholder="存档名称" />
+    <div class="modal-actions">
+      <button id="rename-cancel" class="btn-small" style="padding:7px 14px">取消</button>
+      <button id="rename-confirm">确认</button>
+    </div>
+  </div>
+</div>
+
+<!-- 存档删除确认弹窗 -->
+<div class="modal" id="delete-save-modal">
+  <div class="modal-box">
+    <h3>删除存档</h3>
+    <p id="delete-save-msg" class="hint" style="margin:0">确定要删除该存档吗？此操作无法撤销。</p>
+    <div class="modal-actions">
+      <button id="delete-save-cancel" class="btn-small" style="padding:7px 14px">取消</button>
+      <button id="delete-save-confirm">确认删除</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const $=s=>document.querySelector(s);
-const LS_KEY='oc-dialog-editor:v1';
+const LS_SAVES='oc-saves:v1';
+const LS_CURRENT='oc-current-save';
 
 /* ---------- 本地存储安全封装 ---------- */
-function lsGet(){
-  try{const raw=localStorage.getItem(LS_KEY);return raw?JSON.parse(raw):null;}catch(e){return null;}
+function lsGet(key){
+  try{const raw=localStorage.getItem(key);return raw?JSON.parse(raw):null;}catch(e){return null;}
 }
-function lsSet(obj){
-  try{
-    localStorage.setItem(LS_KEY,JSON.stringify(obj));
-    flashSave();
-    return true;
-  }catch(e){
-    if(e.name==='QuotaExceededError'||e.code===22){
-      toast('本地存储空间已满，图片可能未保存，建议导出数据备份或删除部分图片');
-    }else{
-      console.warn('保存失败',e);
-    }
+function lsSet(key,obj){
+  try{localStorage.setItem(key,JSON.stringify(obj));return true;}
+  catch(e){
+    if(e.name==='QuotaExceededError'||e.code===22)toast('本地存储空间已满，图片可能未保存');
     return false;
   }
 }
-function lsRemove(){try{localStorage.removeItem(LS_KEY);}catch(e){}}
+function lsRemove(key){try{localStorage.removeItem(key);}catch(e){}}
 
+/* ---------- 默认存档内容 ---------- */
+function defaultSlots(){
+  return [{
+    id:'save-1',
+    name:'初始存档',
+    builtin:true,
+    updated:Date.now(),
+    data:{
+      chatTitle:'群聊',
+      roles:['Alice','Bob'],
+      me:'Alice',
+      avatars:{},
+      notes:{},
+      lines:[
+        {role:'Alice',text:'你好，Bob。',image:undefined},
+        {role:'Bob',text:'你好，Alice。',image:undefined}
+      ]
+    }
+  }];
+}
+function newSlotData(){
+  return {chatTitle:'群聊',roles:[],me:'',avatars:{},notes:{},lines:[]};
+}
+function blankSlot(name){
+  return {id:'save-'+Date.now()+'-'+Math.random().toString(36).slice(2,6),name,builtin:false,updated:Date.now(),data:newSlotData()};
+}
+
+/* ---------- 读取/初始化存档列表 ---------- */
+function loadSlots(){
+  let slots=lsGet(LS_SAVES);
+  if(!Array.isArray(slots)||!slots.length){
+    slots=defaultSlots();
+    lsSet(LS_SAVES,slots);
+  }
+  // 规范化：确保每个 slot 结构完整
+  slots=slots.map(s=>({
+    id:s.id||('save-'+Math.random().toString(36).slice(2)),
+    name:s.name||'未命名存档',
+    builtin:!!s.builtin,
+    updated:s.updated||Date.now(),
+    data:s.data||newSlotData()
+  }));
+  slots.forEach(s=>{s.data.lines=(s.data.lines||[]).map(l=>({role:l.role||'',text:l.text||'',image:l.image||undefined}));s.data.avatars=s.data.avatars||{};s.data.notes=s.data.notes||{}});
+  return slots;
+}
+let slots=loadSlots();
+let currentId=lsGet(LS_CURRENT)||slots[0].id;
+if(!slots.find(s=>s.id===currentId))currentId=slots[0].id;
+
+/* 当前存档数据代理：所有读写都走它 */
+function currentSlot(){return slots.find(s=>s.id===currentId)||slots[0]}
+const data=()=>currentSlot().data;
+
+/* 保存当前存档 + 提示 */
 let saveFlashTimer;
 function flashSave(){
   const f=$('#save-flag');if(!f)return;
-  const t=new Date();
-  const pad=n=>String(n).padStart(2,'0');
-  f.textContent='已自动保存 '+pad(t.getHours())+':'+pad(t.getMinutes())+':'+pad(t.getSeconds());
+  const t=new Date(),pad=n=>String(n).padStart(2,'0');
+  f.textContent='['+currentSlot().name+'] 已自动保存 '+pad(t.getHours())+':'+pad(t.getMinutes())+':'+pad(t.getSeconds());
+}
+function saveCurrent(){
+  const slot=currentSlot();slot.updated=Date.now();
+  lsSet(LS_SAVES,slots);lsSet(LS_CURRENT,currentId);flashSave();
 }
 
-/* ---------- 默认状态 ---------- */
-function defaultState(){
-  return {
-    chatTitle:'群聊',
-    roles:['Alice','Bob'],
-    me:'Alice',
-    avatars:{},
-    notes:{},
-    lines:[
-      {role:'Alice',text:'你好，Bob。',image:undefined},
-      {role:'Bob',text:'你好，Alice。',image:undefined}
-    ]
-  };
-}
+/* ---------- 轻提示 ---------- */
+let toastTimer;
+function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('show'),2200)}
 
-/* ---------- 从本地恢复，失败回退默认 ---------- */
-function loadState(){
-  const saved=lsGet();
-  if(!saved||!Array.isArray(saved.roles)||!Array.isArray(saved.lines))return defaultState();
-  const s=defaultState();
-  s.chatTitle=saved.chatTitle!==undefined?saved.chatTitle:s.chatTitle;
-  s.roles=saved.roles||s.roles;
-  s.me=(saved.me&&s.roles.includes(saved.me))?saved.me:s.roles[0]||'';
-  s.avatars=saved.avatars||{};
-  s.notes=saved.notes||{};
-  s.roles.forEach(r=>{if(!s.avatars[r])s.avatars[r]=''});
-  s.lines=(saved.lines||[]).map(l=>({role:l.role||'',text:l.text||'',image:l.image||undefined}));
-  return s;
-}
-
-const state=loadState();
-
-/* 自动保存：任何修改后调用 */
-function save(){lsSet({chatTitle:state.chatTitle,roles:state.roles,me:state.me,avatars:state.avatars,notes:state.notes,lines:state.lines});}
-
+/* ---------- 主题 ---------- */
 const themeToggle=$('#theme-toggle');
 function applyTheme(t){
   document.body.className=t;
   themeToggle.textContent='切换';
   localStorage.setItem('oc-theme',t);
-  save();
 }
 applyTheme(localStorage.getItem('oc-theme')||'light');
 themeToggle.onclick=()=>applyTheme(document.body.classList.contains('dark')?'light':'dark');
@@ -264,21 +324,44 @@ const palette=['#ff6b6b','#f59e0b','#4ade80','#38bdf8','#a78bfa','#fb7185','#22d
 const roleColor=r=>{let h=0;for(let i=0;i<r.length;i++)h=r.charCodeAt(i)+((h<<5)-h);return palette[Math.abs(h)%palette.length]};
 const smallBtn=(t,a,r)=>{const b=document.createElement('button');b.type='button';b.textContent=t;b.className='btn-small';b.dataset.action=a;if(r)b.dataset.role=r;return b};
 
-let toastTimer;
-function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('show'),2200)}
-
 function setAvatar(el,role){
-  const d=state.avatars[role];
+  const d=data().avatars[role];
   el.style.backgroundImage='none';
   el.style.background=d?'none':roleColor(role);
   el.textContent=d?'':role.trim().charAt(0).toUpperCase();
   if(d){el.style.backgroundImage=`url(${d})`;el.style.backgroundSize='cover';el.style.backgroundPosition='center'}
 }
 
+/* ---------- 渲染 ---------- */
 function render(){
-  $('#chat-title').value=state.chatTitle;
+  renderSaves();
+  renderEditor();
+  renderPreview();
+}
+function renderSaves(){
+  const ul=$('#save-list');ul.innerHTML='';
+  const sorted=[...slots].sort((a,b)=>b.updated-a.updated);
+  sorted.forEach(s=>{
+    const li=document.createElement('li');li.className='save-item'+(s.id===currentId?' active':'');
+    const left=document.createElement('div');left.style.display='flex';left.style.alignItems='center';left.style.minWidth='0';
+    const name=document.createElement('span');name.className='save-name';name.textContent=s.name;name.title='切换到 '+s.name;
+    name.onclick=()=>switchSave(s.id);
+    const meta=document.createElement('span');meta.className='save-meta';
+    const d=new Date(s.updated),pad=n=>String(n).padStart(2,'0');
+    meta.textContent=pad(d.getMonth()+1)+'/'+pad(d.getDate())+' '+pad(d.getHours())+':'+pad(d.getMinutes());
+    left.append(name,meta);
+    const acts=document.createElement('div');acts.className='save-actions';
+    if(!s.builtin)acts.append(smallBtn('重命名','rename-save',s.id));
+    acts.append(smallBtn('复制','dup-save',s.id));
+    if(!s.builtin)acts.append(smallBtn('删除','del-save',s.id));
+    li.append(left,acts);ul.appendChild(li);
+  });
+}
+function renderEditor(){
+  const d=data();
+  $('#chat-title').value=d.chatTitle;
   const ul=$('#role-list');ul.innerHTML='';
-  state.roles.forEach(role=>{
+  d.roles.forEach(role=>{
     const li=document.createElement('li');
     const top=document.createElement('div');top.className='role-row';
     const left=document.createElement('div');left.className='role-item-left';
@@ -288,20 +371,20 @@ function render(){
     const ops=document.createElement('div');
     ops.append(smallBtn('头像','upload-avatar',role),smallBtn('删除','delete-role',role));
     top.append(left,ops);
-    const note=document.createElement('input');note.type='text';note.className='role-note';note.placeholder='角色备注（可选）';note.value=state.notes[role]||'';note.dataset.role=role;
+    const note=document.createElement('input');note.type='text';note.className='role-note';note.placeholder='角色备注（可选）';note.value=d.notes[role]||'';note.dataset.role=role;
     li.append(top,note);ul.appendChild(li);
   });
   const ms=$('#me-select');ms.innerHTML='';
-  if(!state.roles.includes(state.me))state.me=state.roles[0]||'';
-  state.roles.forEach(r=>ms.add(new Option(r,r)));
-  ms.value=state.me;
+  if(!d.roles.includes(d.me))d.me=d.roles[0]||'';
+  d.roles.forEach(r=>ms.add(new Option(r,r)));
+  ms.value=d.me;
   const ll=$('#line-list');ll.innerHTML='';
-  state.lines.forEach((ln,i)=>{
+  d.lines.forEach((ln,i)=>{
     const row=document.createElement('div');row.className='line-row';row.dataset.index=i;
     const sel=document.createElement('select');sel.className='role-select';
     sel.add(new Option('选角色',''));
-    state.roles.forEach(r=>sel.add(new Option(r,r)));
-    if(!state.roles.includes(ln.role))sel.add(new Option(ln.role,ln.role));
+    d.roles.forEach(r=>sel.add(new Option(r,r)));
+    if(!d.roles.includes(ln.role))sel.add(new Option(ln.role,ln.role));
     sel.value=ln.role;
     const inp=document.createElement('input');inp.type='text';inp.className='line-text';inp.placeholder='输入台词…';inp.value=ln.text;
     row.append(sel,inp);
@@ -310,84 +393,118 @@ function render(){
       row.append(thumb);
     }
     row.append(smallBtn('↑','up'),smallBtn('↓','down'));
-    const imgBtn=smallBtn(ln.image?'换图':'图','upload-img');row.append(imgBtn);
+    row.append(smallBtn(ln.image?'换图':'图','upload-img'));
     if(ln.image)row.append(smallBtn('删图','remove-img'));
     row.append(smallBtn('×','delete'));
     ll.appendChild(row);
   });
+}
+function renderPreview(){
+  const d=data();
   const cap=$('#capture');cap.innerHTML='';
-  const hd=document.createElement('div');hd.className='chat-title';hd.textContent=state.chatTitle.trim()||'对话';
+  const hd=document.createElement('div');hd.className='chat-title';hd.textContent=d.chatTitle.trim()||'对话';
   cap.appendChild(hd);
-  const valid=state.lines.filter(l=>l.role&&(l.text.trim()||l.image));
+  const valid=d.lines.filter(l=>l.role&&(l.text.trim()||l.image));
   if(!valid.length){const tip=document.createElement('div');tip.className='empty-tip';tip.textContent='暂无对话';cap.appendChild(tip);return}
   valid.forEach(l=>{
-    const msg=document.createElement('div');msg.className='chat-msg '+(l.role===state.me?'mine':'other');
+    const msg=document.createElement('div');msg.className='chat-msg '+(l.role===d.me?'mine':'other');
     const av=document.createElement('div');av.className='avatar';setAvatar(av,l.role);
     const body=document.createElement('div');body.className='msg-body';
     const name=document.createElement('div');name.className='msg-name';name.textContent=l.role;
     const bub=document.createElement('div');bub.className='msg-bubble';
-    if(l.image){
-      const img=document.createElement('img');img.src=l.image;img.alt='';
-      bub.appendChild(img);
-    }
-    if(l.text && l.text.trim())bub.appendChild(document.createTextNode(l.text.trim()));
+    if(l.image){const img=document.createElement('img');img.src=l.image;img.alt='';bub.appendChild(img)}
+    if(l.text&&l.text.trim())bub.appendChild(document.createTextNode(l.text.trim()));
     body.append(name,bub);msg.append(av,body);cap.appendChild(msg);
   });
 }
 
+/* ---------- 存档操作 ---------- */
+function switchSave(id){
+  if(id===currentId)return;
+  currentId=id;lsSet(LS_CURRENT,currentId);render();toast('已切换到「'+currentSlot().name+'」');
+}
+function createSave(name){
+  const n=name.trim();
+  if(slots.find(s=>s.name===n)){toast('已存在同名存档');return false}
+  const slot=blankSlot(n||('存档 '+new Date().toLocaleString()));
+  slots.push(slot);currentId=slot.id;saveCurrent();render();toast('已新建存档「'+slot.name+'」');
+  return true;
+}
+function renameSave(id,name){
+  const n=name.trim();if(!n)return false;
+  if(slots.find(s=>s.id!==id&&s.name===n)){toast('已存在同名存档');return false}
+  const slot=slots.find(s=>s.id===id);if(!slot)return false;
+  slot.name=n;saveCurrent();render();toast('已重命名为「'+n+'」');return true;
+}
+function deleteSave(id){
+  if(slots.length<=1){toast('至少保留一个存档');return}
+  const idx=slots.findIndex(s=>s.id===id);if(idx<0)return;
+  const slot=slots[idx];
+  if(slot.builtin){toast('初始存档不可删除');return}
+  slots.splice(idx,1);
+  if(currentId===id)currentId=slots[0].id;
+  saveCurrent();render();toast('已删除存档「'+slot.name+'」');
+}
+function duplicateSave(id){
+  const src=slots.find(s=>s.id===id);if(!src)return;
+  const copy=JSON.parse(JSON.stringify(src));
+  let base=src.name+' 副本',name=base,i=2;
+  while(slots.find(s=>s.name===name))name=base+' '+i++;
+  copy.id='save-'+Date.now()+'-'+Math.random().toString(36).slice(2,6);
+  copy.name=name;copy.builtin=false;copy.updated=Date.now();
+  slots.push(copy);currentId=copy.id;saveCurrent();render();toast('已复制为「'+name+'」');
+}
+
+/* ---------- 角色操作 ---------- */
 function addRole(name){
   const n=(name!==undefined?name:$('#new-role').value).trim();
   if(!n){alert('请输入角色名');return false}
-  if(state.roles.includes(n)){if(name===undefined)toast(`角色“${n}”已存在`);return false}
-  state.roles.push(n);state.avatars[n]='';state.notes[n]='';
-  if(name===undefined){$('#new-role').value='';render();save();$('#new-role').focus()}
+  if(data().roles.includes(n)){if(name===undefined)toast(`角色“${n}”已存在`);return false}
+  data().roles.push(n);data().avatars[n]='';data().notes[n]='';
+  if(name===undefined){$('#new-role').value='';render();saveCurrent();$('#new-role').focus()}
   return true;
 }
 
-/* ===== 批量添加弹窗 ===== */
+/* 批量添加弹窗 */
 function batchAdd(){
   const raw=$('#batch-input').value;
   const names=raw.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
   if(!names.length){alert('请至少输入一个角色名');return}
   let added=0,skipped=0;
   names.forEach(n=>{if(addRole(n))added++;else skipped++});
-  render();save();closeBatch();
+  render();saveCurrent();closeBatch();
   toast(skipped?`已添加 ${added} 个，跳过 ${skipped} 个重复`:`已批量添加 ${added} 个角色`);
 }
 function openBatch(){$('#batch-input').value='';$('#batch-modal').classList.add('show');setTimeout(()=>$('#batch-input').focus(),50)}
 function closeBatch(){$('#batch-modal').classList.remove('show')}
 
-/* ===== 角色删除（内置弹窗） ===== */
+/* 角色删除 */
 let pendingDelete=null;
 function askDeleteRole(r){
   pendingDelete=r;
-  const lineCount=state.lines.filter(l=>l.role===r).length;
+  const lineCount=data().lines.filter(l=>l.role===r).length;
   $('#delete-msg').textContent=lineCount?`删除角色“${r}”及其 ${lineCount} 条对话行？`:`确定要删除角色“${r}”吗？`;
   $('#delete-modal').classList.add('show');
 }
 function doDeleteRole(){
   const r=pendingDelete;if(!r)return;
-  state.roles=state.roles.filter(x=>x!==r);delete state.avatars[r];delete state.notes[r];
-  state.lines=state.lines.filter(l=>l.role!==r);
-  if(!state.roles.includes(state.me))state.me=state.roles[0]||'';
-  pendingDelete=null;closeDelete();render();save();toast(`已删除角色“${r}”`);
+  data().roles=data().roles.filter(x=>x!==r);delete data().avatars[r];delete data().notes[r];
+  data().lines=data().lines.filter(l=>l.role!==r);
+  if(!data().roles.includes(data().me))data().me=data().roles[0]||'';
+  pendingDelete=null;closeDelete();render();saveCurrent();toast(`已删除角色“${r}”`);
 }
 function closeDelete(){$('#delete-modal').classList.remove('show')}
 
-/* ===== 图片压缩（写入本地前先压一下） ===== */
+/* 图片压缩 */
 function compressImage(file,cb){
   const reader=new FileReader();
   reader.onload=ev=>{
     const img=new Image();
     img.onload=()=>{
-      const max=900;
-      let w=img.width,h=img.height;
-      if(w>h&&w>max){h=h*max/w;w=max;}
-      else if(h>max){w=w*max/h;h=max;}
-      const cv=document.createElement('canvas');
-      cv.width=Math.round(w);cv.height=Math.round(h);
-      const ctx=cv.getContext('2d');
-      ctx.drawImage(img,0,0,cv.width,cv.height);
+      const max=900;let w=img.width,h=img.height;
+      if(w>h&&w>max){h=h*max/w;w=max}else if(h>max){w=w*max/h;h=max}
+      const cv=document.createElement('canvas');cv.width=Math.round(w);cv.height=Math.round(h);
+      cv.getContext('2d').drawImage(img,0,0,cv.width,cv.height);
       cb(cv.toDataURL('image/jpeg',0.82));
     };
     img.onerror=()=>cb(ev.target.result);
@@ -396,58 +513,59 @@ function compressImage(file,cb){
   reader.readAsDataURL(file);
 }
 
-/* ===== 对话图片上传 ===== */
+/* 对话图片上传 */
 let uploadLine=null;
 $('#image-upload').onchange=e=>{
   const f=e.target.files[0];if(!f||uploadLine===null)return;
   compressImage(f,dataUrl=>{
-    state.lines[uploadLine].image=dataUrl;
-    uploadLine=null;render();save();toast('图片已添加');
+    data().lines[uploadLine].image=dataUrl;uploadLine=null;render();saveCurrent();toast('图片已添加');
   });
   e.target.value='';
 };
 
-/* ===== 角色头像上传 ===== */
+/* 角色头像上传 */
 let uploadRole=null;
 $('#avatar-upload').onchange=e=>{
   const f=e.target.files[0];if(!f||!uploadRole)return;
-  compressImage(f,dataUrl=>{
-    state.avatars[uploadRole]=dataUrl;
-    uploadRole=null;render();save();
-  });
+  compressImage(f,dataUrl=>{data().avatars[uploadRole]=dataUrl;uploadRole=null;render();saveCurrent()});
   e.target.value='';
 };
 
 function addLine(){
-  if(!state.roles.length){alert('请先添加至少一个角色');return}
-  state.lines.push({role:state.roles[0],text:'',image:undefined});render();save();
+  if(!data().roles.length){alert('请先添加至少一个角色');return}
+  data().lines.push({role:data().roles[0],text:'',image:undefined});render();saveCurrent();
   const ins=document.querySelectorAll('.line-text');const last=ins[ins.length-1];if(last)last.focus();
 }
-function deleteLine(i){state.lines.splice(i,1);render();save()}
-function moveLine(i,d){const n=i+d;if(n<0||n>=state.lines.length)return;[state.lines[i],state.lines[n]]=[state.lines[n],state.lines[i]];render();save()}
+function deleteLine(i){data().lines.splice(i,1);render();saveCurrent()}
+function moveLine(i,d){const n=i+d;if(n<0||n>=data().lines.length)return;[data().lines[i],data().lines[n]]=[data().lines[n],data().lines[i]];render();saveCurrent()}
 function clearLines(){
-  if(state.lines.length===0){toast('已经是空的');return}
-  state.lines=[];render();save();toast('已清空所有对话');
+  if(data().lines.length===0){toast('已经是空的');return}
+  data().lines=[];render();saveCurrent();toast('已清空所有对话');
 }
 
+/* 导出长图 */
 function exportImage(){
   const t=$('#capture');
   if(!window.html2canvas){alert('截图库加载失败，请检查网络后重试。');return}
-  if(!state.lines.filter(l=>l.role&&(l.text.trim()||l.image)).length){alert('没有对话内容');return}
+  if(!data().lines.filter(l=>l.role&&(l.text.trim()||l.image)).length){alert('没有对话内容');return}
   toast('正在生成图片…');const pm=t.style.maxHeight;t.style.maxHeight='none';
   const bg=document.body.classList.contains('dark')?'#152233':'#ebedf0';
   html2canvas(t,{scale:2,backgroundColor:bg,useCORS:true}).then(cv=>{
-    t.style.maxHeight=pm;const a=document.createElement('a');a.download='对话长图.png';a.href=cv.toDataURL('image/png');a.click();toast('长图已导出');
+    t.style.maxHeight=pm;const a=document.createElement('a');a.download=data().chatTitle.trim()||'对话长图';a.download+='.png';a.href=cv.toDataURL('image/png');a.click();toast('长图已导出');
   }).catch(err=>{t.style.maxHeight=pm;alert('生成长图失败：'+err.message)});
 }
 
+/* 导出数据包（单个存档，文件名带存档名） */
 function exportData(){
-  const data={app:'对话编辑器',version:4,chatTitle:state.chatTitle,roles:state.roles,me:state.me,avatars:state.avatars,notes:state.notes,lines:state.lines};
-  const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json;charset=utf-8'});
-  const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='对话数据.json';a.click();
+  const d=data();
+  const payload={app:'对话编辑器',version:5,chatTitle:d.chatTitle,roles:d.roles,me:d.me,avatars:d.avatars,notes:d.notes,lines:d.lines};
+  const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json;charset=utf-8'});
+  const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;
+  a.download=(currentSlot().name||'对话数据')+'.json';a.click();
   URL.revokeObjectURL(url);toast('数据已打包');
 }
 
+/* 导入数据 → 新建存档 */
 $('#data-import').onchange=e=>{
   const f=e.target.files[0];if(!f)return;
   const rd=new FileReader();
@@ -455,26 +573,56 @@ $('#data-import').onchange=e=>{
     try{
       const d=JSON.parse(ev.target.result);
       if(!d||!Array.isArray(d.roles)||!Array.isArray(d.lines))throw new Error('文件格式不正确');
-      if(!confirm('导入数据会覆盖当前所有角色和对话，确定继续吗？'))return;
-      state.chatTitle=d.chatTitle!==undefined?d.chatTitle:'群聊';
-      state.roles=d.roles;state.me=d.me&&d.roles.includes(d.me)?d.me:d.roles[0]||'';
-      state.avatars=d.avatars||{};state.notes=d.notes||{};
-      state.roles.forEach(r=>{if(!state.avatars[r])state.avatars[r]=''});
-      state.lines=d.lines.map(l=>({role:l.role||'',text:l.text||'',image:l.image||undefined}));
-      render();save();toast('数据已复原');
+      let name=d.chatTitle||f.name.replace(/\.json$/,'')||'导入存档';
+      if(slots.find(s=>s.name===name)){
+        let i=2;const base=name;while(slots.find(s=>s.name===name))name=base+' ('+i+++')';
+      }
+      const slot=blankSlot(name);
+      slot.data.chatTitle=d.chatTitle!==undefined?d.chatTitle:'群聊';
+      slot.data.roles=d.roles;slot.data.me=d.me&&d.roles.includes(d.me)?d.me:d.roles[0]||'';
+      slot.data.avatars=d.avatars||{};slot.data.notes=d.notes||{};
+      slot.data.roles.forEach(r=>{if(!slot.data.avatars[r])slot.data.avatars[r]=''});
+      slot.data.lines=d.lines.map(l=>({role:l.role||'',text:l.text||'',image:l.image||undefined}));
+      slots.push(slot);currentId=slot.id;saveCurrent();render();toast('已作为新存档「'+name+'」导入');
     }catch(err){alert('导入失败：'+err.message)}
   };
   rd.readAsText(f,'utf-8');e.target.value='';
 };
 
+/* 清除全部本地缓存 */
 $('#reset-cache-btn').onclick=()=>{
-  if(!confirm('清除本地缓存会丢失当前未导出的内容，确定继续吗？'))return;
-  lsRemove();
-  const fresh=defaultState();
-  Object.assign(state,fresh);
-  render();toast('已清除本地缓存，恢复初始示例');
+  if(!confirm('清除本地缓存会删除所有存档，且无法恢复，确定继续吗？'))return;
+  lsRemove(LS_SAVES);lsRemove(LS_CURRENT);
+  slots=defaultSlots();currentId=slots[0].id;saveCurrent();render();toast('已清除，恢复初始存档');
 };
 
+/* 重命名弹窗 */
+let renameTarget=null;
+function openRename(id){
+  renameTarget=id;const slot=slots.find(s=>s.id===id);if(!slot)return;
+  $('#rename-input').value=slot.name;$('#rename-modal').classList.add('show');setTimeout(()=>$('#rename-input').focus(),50);
+}
+function closeRename(){$('#rename-modal').classList.remove('show');renameTarget=null}
+
+/* 删除存档弹窗 */
+let deleteSaveTarget=null;
+function openDeleteSave(id){
+  deleteSaveTarget=id;const slot=slots.find(s=>s.id===id);if(!slot)return;
+  $('#delete-save-msg').textContent=slot.builtin?'初始存档不可删除。':'确定要删除存档「'+slot.name+'」吗？此操作无法撤销。';
+  $('#delete-save-confirm').style.display=slot.builtin?'none':'inline-block';
+  $('#delete-save-modal').classList.add('show');
+}
+function closeDeleteSave(){$('#delete-save-modal').classList.remove('show');deleteSaveTarget=null}
+
+/* ---------- 事件绑定 ---------- */
+$('#new-save-btn').onclick=()=>{const inp=$('#new-save-name');createSave(inp.value);inp.value=''};
+$('#new-save-name').addEventListener('keydown',e=>{if(e.key==='Enter'){$('#new-save-btn').click()}});
+$('#rename-confirm').onclick=()=>{if(renameTarget&&renameSave(renameTarget,$('#rename-input').value))closeRename()};
+$('#rename-cancel').onclick=closeRename;
+$('#rename-modal').addEventListener('click',e=>{if(e.target===$('#rename-modal'))closeRename()});
+$('#delete-save-confirm').onclick=()=>{if(deleteSaveTarget)deleteSave(deleteSaveTarget);closeDeleteSave()};
+$('#delete-save-cancel').onclick=closeDeleteSave;
+$('#delete-save-modal').addEventListener('click',e=>{if(e.target===$('#delete-save-modal'))closeDeleteSave()});
 $('#add-role-btn').onclick=()=>addRole();
 $('#new-role').addEventListener('keydown',e=>{if(e.key==='Enter')addRole()});
 $('#batch-add-btn').onclick=openBatch;
@@ -489,8 +637,8 @@ $('#clear-btn').onclick=clearLines;
 $('#export-img-btn').onclick=exportImage;
 $('#export-data-btn').onclick=exportData;
 $('#import-data-btn').onclick=()=>$('#data-import').click();
-$('#me-select').onchange=e=>{state.me=e.target.value;render();save()};
-$('#chat-title').addEventListener('input',e=>{state.chatTitle=e.target.value;render();save()});
+$('#me-select').onchange=e=>{data().me=e.target.value;render();saveCurrent()};
+$('#chat-title').addEventListener('input',e=>{data().chatTitle=e.target.value;render();saveCurrent()});
 
 document.addEventListener('click',e=>{
   const b=e.target.closest('button[data-action]');if(!b)return;
@@ -498,17 +646,20 @@ document.addEventListener('click',e=>{
   if(action==='delete-role')askDeleteRole(role);
   else if(action==='upload-avatar'){uploadRole=role;$('#avatar-upload').click()}
   else if(action==='upload-img'){uploadLine=+ri;$('#image-upload').click()}
-  else if(action==='remove-img'){const i=+ri;state.lines[i].image=undefined;render();save();toast('图片已移除')}
+  else if(action==='remove-img'){data().lines[+ri].image=undefined;render();saveCurrent();toast('图片已移除')}
   else if(action==='delete')deleteLine(+ri);
   else if(action==='up')moveLine(+ri,-1);
   else if(action==='down')moveLine(+ri,1);
+  else if(action==='rename-save')openRename(role);
+  else if(action==='del-save')openDeleteSave(role);
+  else if(action==='dup-save')duplicateSave(role);
 });
 document.addEventListener('change',e=>{
-  if(e.target.classList.contains('role-select')){const i=e.target.closest('.line-row').dataset.index;state.lines[i].role=e.target.value;render();save()}
+  if(e.target.classList.contains('role-select')){const i=e.target.closest('.line-row').dataset.index;data().lines[i].role=e.target.value;render();saveCurrent()}
 });
 document.addEventListener('input',e=>{
-  if(e.target.classList.contains('line-text')){const i=e.target.closest('.line-row').dataset.index;state.lines[i].text=e.target.value;render();save()}
-  else if(e.target.classList.contains('role-note')){const r=e.target.dataset.role;state.notes[r]=e.target.value;save()}
+  if(e.target.classList.contains('line-text')){const i=e.target.closest('.line-row').dataset.index;data().lines[i].text=e.target.value;render();saveCurrent()}
+  else if(e.target.classList.contains('role-note')){const r=e.target.dataset.role;data().notes[r]=e.target.value;saveCurrent()}
 });
 
 render();
